@@ -184,8 +184,10 @@ static int request_table_ver_and_size(ryzen_access ry)
 			ry->table_size = 0x1000;
 	}
 
-	if (ry->nb && ry->nb->pm_table_size) {
-		ry->table_size = ry->nb->pm_table_size;
+	switch (ry->family) {
+	case FAM_STRIXPOINT:
+		ry->table_size = 0xAA0;
+		break;
 	}
 
 	if (resp != REP_MSG_OK) {
