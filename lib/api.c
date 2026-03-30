@@ -1,31 +1,32 @@
 // SPDX-License-Identifier: LGPL
 /* Copyright (C) 2018-2019 Jiaxun Yang <jiaxun.yang@flygoat.com> */
 /* RyzenAdj API */
+#include <stdlib.h>
+#include <string.h>
 
 #include "ryzenadj.h"
 #include "math.h"
 
-#ifdef _WIN32
-#include <windows.h>
-#else
+#ifndef _WIN32
 #include <unistd.h>
 #define Sleep(x) usleep((x)*1000)
 #endif
 
 
-EXP ryzen_access CALL init_ryzenadj()
-{
+EXP ryzen_access CALL init_ryzenadj() {
+	const enum ryzen_family family = cpuid_get_family();
 	ryzen_access ry;
-	enum ryzen_family family = cpuid_get_family();
+
 	if (family == FAM_UNKNOWN)
 		return NULL;
 
-	ry = (ryzen_access)malloc((sizeof(*ry)));
+	ry = (ryzen_access)malloc(sizeof(*ry));
 
 	if (!ry){
 		printf("Out of memory\n");
 		return NULL;
 	}
+
 	memset(ry, 0, sizeof(*ry));
 
 	ry->family = family;
@@ -33,56 +34,39 @@ EXP ryzen_access CALL init_ryzenadj()
 	ry->bios_if_ver = 0;
 	ry->table_values = NULL;
 
-	ry->pci_obj = init_pci_obj();
-	if(!ry->pci_obj){
-		printf("Unable to get PCI Obj, check permission\n");
+	ry->os_access = init_os_access_obj();
+	if(!ry->os_access){
+		printf("Unable to get os_access Obj, check permission\n");
 		return NULL;
 	}
 
-	ry->nb = get_nb(ry->pci_obj);
-	if(!ry->nb){
-		printf("Unable to get NB Obj\n");
-		goto out_free_pci_obj;
-	}
-
-	ry->mp1_smu = get_smu(ry->nb, TYPE_MP1);
+	ry->mp1_smu = get_smu(ry->os_access, TYPE_MP1);
 	if(!ry->mp1_smu){
 		printf("Unable to get MP1 SMU Obj\n");
-		goto out_free_nb;
+		goto err_exit;
 	}
 
-	ry->psmu = get_smu(ry->nb, TYPE_PSMU);
+	ry->psmu = get_smu(ry->os_access, TYPE_PSMU);
 	if(!ry->psmu){
 		printf("Unable to get RSMU Obj\n");
-		goto out_free_mp1_smu;
+		goto err_exit;
 	}
 
 	return ry;
 
-out_free_mp1_smu:
-	free_smu(ry->mp1_smu);
-out_free_nb:
-	free_nb(ry->nb);
-out_free_pci_obj:
-	free_pci_obj(ry->pci_obj);
-	free(ry);
+err_exit:
+	cleanup_ryzenadj(ry);
 	return NULL;
 }
 
-EXP void CALL cleanup_ryzenadj(ryzen_access ry){
+EXP void CALL cleanup_ryzenadj(ryzen_access ry) {
 	if (ry == NULL)
 	    return;
 
-	if (ry->table_values){
-		free(ry->table_values);
-	}
-	if (ry->mem_obj){
-		free_mem_obj(ry->mem_obj);
-	}
-	free_smu(ry->psmu);
-	free_smu(ry->mp1_smu);
-	free_nb(ry->nb);
-	free_pci_obj(ry->pci_obj);
+	free(ry->mp1_smu);
+	free(ry->psmu);
+	free_os_access_obj(ry->os_access);
+	free(ry->table_values);
 	free(ry);
 }
 
@@ -122,66 +106,71 @@ do {                                                                        \
 	}                                                                       \
 } while (0);
 
-static int request_table_ver_and_size(ryzen_access ry)
-{
+static int request_table_ver_and_size(ryzen_access ry) {
 	unsigned int get_table_ver_msg;
 	int resp;
-	switch (ry->family)
-	{
-	case FAM_RAVEN:
-	case FAM_PICASSO:
-	case FAM_DALI:
-		get_table_ver_msg = 0xC;
-		break;
-	case FAM_RENOIR:
-	case FAM_LUCIENNE:
-	case FAM_CEZANNE:
-	case FAM_REMBRANDT:
-	case FAM_PHOENIX:
-	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
-	case FAM_STRIXPOINT:
-	case FAM_STRIXHALO:
-		get_table_ver_msg = 0x6;
-		break;
-	default:
-		printf("request_table_ver_and_size is not supported on this family\n");
-		return ADJ_ERR_FAM_UNSUPPORTED;
+
+	switch (ry->family) {
+		case FAM_RAVEN:
+		case FAM_PICASSO:
+		case FAM_DALI:
+			get_table_ver_msg = 0xC;
+			break;
+		case FAM_RENOIR:
+		case FAM_LUCIENNE:
+		case FAM_CEZANNE:
+		case FAM_REMBRANDT:
+		case FAM_PHOENIX:
+		case FAM_HAWKPOINT:
+		case FAM_KRACKANPOINT:
+		case FAM_STRIXPOINT:
+		case FAM_STRIXHALO:
+			get_table_ver_msg = 0x6;
+			break;
+		default:
+			printf("request_table_ver_and_size is not supported on this family\n");
+			return ADJ_ERR_FAM_UNSUPPORTED;
 	}
 
 	smu_service_args_t args = {0, 0, 0, 0, 0, 0};
 	resp = smu_service_req(ry->psmu, get_table_ver_msg, &args);
 	ry->table_ver = args.arg0;
 
-	switch (ry->table_ver)
-	{
-	case 0x1E0001: ry->table_size = 0x568; break;
-	case 0x1E0002: ry->table_size = 0x580; break;
-	case 0x1E0003: ry->table_size = 0x578; break;
-	case 0x1E0004: ry->table_size = 0x608; break;
-	case 0x1E0005: ry->table_size = 0x608; break;
-	case 0x1E000A: ry->table_size = 0x608; break;
-	case 0x1E0101: ry->table_size = 0x608; break;
-	case 0x370000: ry->table_size = 0x794; break;
-	case 0x370001: ry->table_size = 0x884; break;
-	case 0x370002: ry->table_size = 0x88C; break;
-	case 0x370003: ry->table_size = 0x8AC; break;
-	case 0x370004: ry->table_size = 0x8AC; break;
-	case 0x370005: ry->table_size = 0x8C8; break;
-	case 0x3F0000: ry->table_size = 0x7AC; break;
-	case 0x400001: ry->table_size = 0x910; break;
-	case 0x400002: ry->table_size = 0x928; break;
-	case 0x400003: ry->table_size = 0x94C; break;
-	case 0x400004: ry->table_size = 0x944; break;
-	case 0x400005: ry->table_size = 0x944; break;
-	case 0x450004: ry->table_size = 0xA44; break;
-	case 0x450005: ry->table_size = 0xA44; break;
-	case 0x4C0006: ry->table_size = 0xAA0; break;
-	case 0x4C0009: ry->table_size = 0xAA0; break;
-	case 0x64020c: ry->table_size = 0xE50; break;
-		default:
-			//use a larger size then the largest known table to be able to test real table size of unknown tables
-			ry->table_size = 0x1000;
+	switch (ry->table_ver) {
+		case 0x1E0001: ry->table_size = 0x568; break;
+		case 0x1E0002: ry->table_size = 0x580; break;
+		case 0x1E0003: ry->table_size = 0x578; break;
+		case 0x1E0004:
+		case 0x1E0005:
+		case 0x1E000A:
+		case 0x1E0101: ry->table_size = 0x608; break;
+		case 0x370000: ry->table_size = 0x794; break;
+		case 0x370001: ry->table_size = 0x884; break;
+		case 0x370002: ry->table_size = 0x88C; break;
+		case 0x370003:
+		case 0x370004: ry->table_size = 0x8AC; break;
+		case 0x370005: ry->table_size = 0x8C8; break;
+		case 0x3F0000: ry->table_size = 0x7AC; break;
+		case 0x400001: ry->table_size = 0x910; break;
+		case 0x400002: ry->table_size = 0x928; break;
+		case 0x400003: ry->table_size = 0x94C; break;
+		case 0x400004:
+		case 0x400005: ry->table_size = 0x944; break;
+		case 0x450004: ry->table_size = 0xAA4; break;
+		case 0x450005: ry->table_size = 0xAB0; break;
+		case 0x4C0003: ry->table_size = 0xB18; break;
+		case 0x4C0004: ry->table_size = 0xB1C; break;
+		case 0x4C0005: ry->table_size = 0xAF8; break;
+		case 0x4C0006: ry->table_size = 0xAFC; break;
+		case 0x4C0008: ry->table_size = 0xAF0; break;
+		case 0x4C0007:
+		case 0x4C0009: ry->table_size = 0xB00; break;
+		case 0x5D0008:
+		case 0x5D0009: ry->table_size = 0xD54; break;
+		case 0x64020c: ry->table_size = 0xE50; break;
+
+		// use a larger size then the largest known table to be able to test real table size of unknown tables
+		default: ry->table_size = 0x1000; break;
 	}
 
 	switch (ry->family) {
@@ -219,7 +208,7 @@ static int request_table_addr(ryzen_access ry)
 	case FAM_REMBRANDT:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		get_table_addr_msg = 0x66;
@@ -236,7 +225,7 @@ static int request_table_addr(ryzen_access ry)
 	case FAM_REMBRANDT:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		ry->table_addr = (uint64_t) args.arg1 << 32 | args.arg0;
@@ -274,7 +263,7 @@ static int request_transfer_table(ryzen_access ry)
 	case FAM_REMBRANDT:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		transfer_table_msg = 0x65;
@@ -319,9 +308,7 @@ EXP int CALL init_table(ryzen_access ry)
 	}
 
 	//init memory object because it is prerequiremt to woring with physical memory address
-	ry->mem_obj = init_mem_obj(ry->table_addr);
-	if(!ry->mem_obj)
-	{
+	if (init_mem_obj(ry->os_access, ry->table_addr) < 0) {
 		printf("Unable to get memory access\n");
 		return ADJ_ERR_MEMORY_ACCESS;
 	}
@@ -400,7 +387,7 @@ EXP int CALL refresh_table(ryzen_access ry)
 		return errorcode;
 	}
 
-	if(copy_pm_table(ry->nb, ry->table_values, ry->table_size)){
+	if(copy_pm_table(ry->os_access, ry->table_values, ry->table_size)){
 		printf("refresh_table failed\n");
 		return ADJ_ERR_MEMORY_ACCESS;
 	}
@@ -439,11 +426,11 @@ do {                                                 \
 	}                                                \
 } while (0);
 
-#define _read_float_value(OFFSET)                   \
-do {                                                \
-	if(!ry->table_values)                           \
-		return NAN;                                 \
-	return ry->table_values[OFFSET / 4];            \
+#define _read_float_value(OFFSET)                    \
+do {                                                 \
+	if(!ry->table_values)                            \
+		return NAN;                                  \
+	return ry->table_values[(OFFSET) / 4];           \
 } while (0);
 
 
@@ -467,14 +454,19 @@ EXP int CALL set_stapm_limit(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x14);
-        if (err) {
-            printf("%s: Retry with PSMU\n", __func__);
-		    _do_adjust_psmu(0x31);
-        }
+		if (err) {
+			printf("%s: Retry with PSMU\n", __func__);
+				_do_adjust_psmu(0x31);
+		}
+		break;
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust(0x4f);
+		break;
 	default:
 		break;
 	}
@@ -500,10 +492,15 @@ EXP int CALL set_fast_limit(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x15);
+		break;
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust(0x3e);
+		break;
 	default:
 		break;
 	}
@@ -530,10 +527,15 @@ EXP int CALL set_slow_limit(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x16);
+		break;
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust(0x5f);
+		break;
 	default:
 		break;
 	}
@@ -560,10 +562,15 @@ EXP int CALL set_slow_time(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x17);
+		break;
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust(0x60);
+		break;
 	default:
 		break;
 	}
@@ -590,10 +597,13 @@ EXP int CALL set_stapm_time(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x18);
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust(0x4e);
 	default:
 		break;
 	}
@@ -620,10 +630,15 @@ EXP int CALL set_tctl_temp(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x19);
+		break;
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust(0x3f);
+		break;
 	default:
 		break;
 	}
@@ -650,10 +665,15 @@ EXP int CALL set_vrm_current(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x1a);
+		break;
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust(0x3c);
+		break;
 	default:
 		break;
 	}
@@ -680,7 +700,7 @@ EXP int CALL set_vrmsoc_current(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x1b);
@@ -735,7 +755,7 @@ EXP int CALL set_vrmmax_current(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x1c);
@@ -780,7 +800,7 @@ EXP int CALL set_vrmsocmax_current(ryzen_access ry, uint32_t value){
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x1d);
@@ -1042,7 +1062,7 @@ EXP int CALL set_prochot_deassertion_ramp(ryzen_access ry, uint32_t value) {
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x1f);
@@ -1072,8 +1092,8 @@ EXP int CALL set_apu_skin_temp_limit(ryzen_access ry, uint32_t value) {
 	case FAM_HAWKPOINT:
 		_do_adjust(0x33);
 		break;
-	case FAM_STRIXHALO:			
-		// not implemented on StrixHalo, seems to be controlled only via tctl-temp	
+	case FAM_STRIXHALO:
+		// not implemented on StrixHalo, seems to be controlled only via tctl-temp
 	default:
 		break;
 	}
@@ -1101,8 +1121,8 @@ EXP int CALL set_dgpu_skin_temp_limit(ryzen_access ry, uint32_t value) {
 	case FAM_STRIXPOINT:
 		_do_adjust(0x34);
 		break;
-	case FAM_STRIXHALO:			
-		// not implemented on StrixHalo, seems to be controlled only via tctl-temp			
+	case FAM_STRIXHALO:
+		// not implemented on StrixHalo, seems to be controlled only via tctl-temp
 	default:
 		break;
 	}
@@ -1124,7 +1144,7 @@ EXP int CALL set_apu_slow_limit(ryzen_access ry, uint32_t value) {
 	case FAM_REMBRANDT:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x23);
@@ -1152,7 +1172,7 @@ EXP int CALL set_skin_temp_power_limit(ryzen_access ry, uint32_t value) {
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x4a);
@@ -1176,7 +1196,7 @@ EXP int CALL set_gfx_clk(ryzen_access ry, uint32_t value) {
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN: /* Added to debug on KRK, STX, & STXH */
+	case FAM_KRACKANPOINT: /* Added to debug on KRK, STX, & STXH */
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust_psmu(0x89);
@@ -1208,7 +1228,7 @@ EXP int CALL set_power_saving(ryzen_access ry) {
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x12);
@@ -1240,7 +1260,7 @@ EXP int CALL set_max_performance(ryzen_access ry) {
 	case FAM_MENDOCINO:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x11);
@@ -1371,10 +1391,14 @@ EXP int CALL set_coall(ryzen_access ry, uint32_t value) {
 	case FAM_VANGOGH:
 	case FAM_PHOENIX:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x4C);
+		break;
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust_psmu(0x7);
 		break;
 	default:
 		break;
@@ -1396,10 +1420,14 @@ EXP int CALL set_coper(ryzen_access ry, uint32_t value) {
 	case FAM_PHOENIX:
 	case FAM_VANGOGH:
 	case FAM_HAWKPOINT:
-	case FAM_KRACKAN:
+	case FAM_KRACKANPOINT:
 	case FAM_STRIXPOINT:
 	case FAM_STRIXHALO:
 		_do_adjust(0x4b);
+		break;
+	case FAM_DRAGONRANGE:
+	case FAM_FIRERANGE:
+		_do_adjust_psmu(0x6);
 		break;
 	default:
 		break;
@@ -1461,7 +1489,10 @@ EXP float CALL get_apu_slow_limit(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
+	case 0x005D0008: // Strix Point - looks correct from dumping table, defaults to 45W
+	case 0x005D0009:
 	case 0x0064020c: // StrixHalo - looks correct from dumping table, defaults to 70W
+	case 0x00650005: // Krackan Point
 		_read_float_value(0x18);
 	default:
 		break;
@@ -1487,7 +1518,10 @@ EXP float CALL get_apu_slow_value(ryzen_access ry) {
 	case 0x00450005:
 	case 0x004C0006:
 	case 0x004C0009:
-	case 0x0064020c: // StrixHalo - untested!	
+	case 0x005D0008: // Strix Point - untested, always 0?
+	case 0x005D0009:
+	case 0x0064020c: // StrixHalo - untested!
+	case 0x00650005: // Krackan Point
 		_read_float_value(0x1C);
 	default:
 		break;
@@ -1523,6 +1557,10 @@ EXP float CALL get_vrm_current(ryzen_access ry) {
 	case 0x004C0008:
 	case 0x004C0009:
 		_read_float_value(0x20);
+	case 0x005D0008: // Strix Point - tested, defaults to 70, max 70
+	case 0x005D0009:
+	case 0x00650005: // Krackan Point
+		_read_float_value(0x30);
 	default:
 		break;
 	}
@@ -1557,6 +1595,10 @@ EXP float CALL get_vrm_current_value(ryzen_access ry) {
 	case 0x004C0008:
 	case 0x004C0009:
 		_read_float_value(0x24);
+	case 0x005D0008: // Strix Point - looks correct from dumping table
+	case 0x005D0009:
+	case 0x00650005: // Krackan Point
+		_read_float_value(0x34);
 	default:
 		break;
 	}
@@ -1591,6 +1633,10 @@ EXP float CALL get_vrmsoc_current(ryzen_access ry) {
 	case 0x004C0008:
 	case 0x004C0009:
 		_read_float_value(0x28);
+	case 0x005D0008: // Strix Point - tested, defaults to 30, max 30
+	case 0x005D0009:
+	case 0x00650005: // Krackan Point
+		_read_float_value(0x38);
 	default:
 		break;
 	}
@@ -1625,6 +1671,10 @@ EXP float CALL get_vrmsoc_current_value(ryzen_access ry) {
 	case 0x004C0008:
 	case 0x004C0009:
 		_read_float_value(0x2C);
+	case 0x005D0008: // Strix Point - looks correct from dumping table
+	case 0x005D0009:
+	case 0x00650005: // Krackan Point
+		_read_float_value(0x3C);
 	default:
 		break;
 	}
@@ -1658,6 +1708,11 @@ EXP float CALL get_vrmmax_current(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
+	// Strix Point - this is vrm_current; 0x1C-0x2C are all 0
+	// Same for Krackan Point
+		_read_float_value(0x30);
+	case 0x005D0008:
+	case 0x005D0009:
 		_read_float_value(0x30);
 	default:
 		break;
@@ -1693,6 +1748,9 @@ EXP float CALL get_vrmmax_current_value(ryzen_access ry) {
 	case 0x004C0008:
 	case 0x004C0009:
 		_read_float_value(0x34);
+	case 0x005D0008:
+	case 0x005D0009:
+		_read_float_value(0x34);
 	default:
 		break;
 	}
@@ -1726,6 +1784,11 @@ EXP float CALL get_vrmsocmax_current(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
+	// Strix Point - this is vrmsoc_current; 0x1C-0x2C are all 0
+	// Same for Krackan Point
+		_read_float_value(0x38);
+	case 0x005D0008:
+	case 0x005D0009:
 		_read_float_value(0x38);
 	default:
 		break;
@@ -1760,6 +1823,9 @@ EXP float CALL get_vrmsocmax_current_value(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
+		_read_float_value(0x3C);
+	case 0x005D0008:
+	case 0x005D0009:
 		_read_float_value(0x3C);
 	default:
 		break;
@@ -1796,6 +1862,9 @@ EXP float CALL get_tctl_temp(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
+	case 0x005D0008: // Strix Point - untested, defaults to 100
+	case 0x005D0009:
+	case 0x00650005: // Krackan Point
 		_read_float_value(0x40);
 	default:
 		break;
@@ -1832,6 +1901,17 @@ EXP float CALL get_tctl_temp_value(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
+	/*
+	 * Strix Point - tested
+	 * 0x44: Zen5 clst, taskset + stress-ng
+	 * 0x4C: Zen5c clst, ditto
+	 * 0x54: gfx, llama-bench/FurMark, gpu_metrics_v3_0
+	 * 0x5C: soc, all of above + memtester
+	 * Corresponding limits default to 100 (untested)
+	 */
+	case 0x005D0008:
+	case 0x005D0009:
+	case 0x00650005: // Krackan Point
 		_read_float_value(0x44);
 	default:
 		break;
@@ -1859,9 +1939,11 @@ EXP float CALL get_apu_skin_temp_limit(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
-	case 0x0064020c: // StrixHalo tested	
+	case 0x005D0008: // Strix Point - untested
+	case 0x005D0009:
+	case 0x0064020c: // StrixHalo tested
 		_read_float_value(0x58);
-		break;	
+		break;
 	default:
 		break;
 	}
@@ -1888,6 +1970,8 @@ EXP float CALL get_apu_skin_temp_value(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
+	case 0x005D0008: // Strix Point - this is gpu_metrics_v3_0.temperature_soc, !=gpu_metrics_v3_0.temperature_skin
+	case 0x005D0009:
 	case 0x0064020c: // StrixHalo tested
 		_read_float_value(0x5C);
 	default:
@@ -1917,6 +2001,9 @@ EXP float CALL get_dgpu_skin_temp_limit(ryzen_access ry) {
 	case 0x004C0009:
 	case 0x0064020c: // StrixHalo tested
 		_read_float_value(0x60);
+	case 0x005D0008: // Strix Point - tested
+	case 0x005D0009:
+		_read_float_value(0x68);
 	default:
 		break;
 	}
@@ -1942,8 +2029,11 @@ EXP float CALL get_dgpu_skin_temp_value(ryzen_access ry) {
 	case 0x004C0007:
 	case 0x004C0008:
 	case 0x004C0009:
-	case 0x0064020c:	
+	case 0x0064020c:
 		_read_float_value(0x64);
+	case 0x005D0008: // Strix Point - calculated from corresponding limit + 0x4, 0 on my device due to no dGPU
+	case 0x005D0009:
+		_read_float_value(0x6C);
 	default:
 		break;
 	}
@@ -2113,6 +2203,11 @@ EXP float CALL get_stapm_time(ryzen_access ry)
 	case 0x004C0008:
 	case 0x004C0009:
 		_read_float_value(0x918);
+	case 0x005D0008: // Strix Point - calculated from slow time (0x9C0 - 0x4), always 1?
+	case 0x005D0009:
+		_read_float_value(0x9BC);
+	case 0x00650005: // Krackan Point, might be incorrect
+		_read_float_value(0x90C);
 	default:
 		break;
 	}
@@ -2155,6 +2250,11 @@ EXP float CALL get_slow_time(ryzen_access ry) {
 	case 0x004C0008:
 	case 0x004C0009:
 		_read_float_value(0x91C);
+	case 0x005D0008: // Strix Point - tested, defaults to 5 (low-power/balanced) or 15 (performance), max 30
+	case 0x005D0009:
+		_read_float_value(0x9C0);
+	case 0x00650005: // Krackan Point, might be incorrect
+		_read_float_value(0x910);
 	default:
 		break;
 	}
@@ -2164,8 +2264,8 @@ EXP float CALL get_slow_time(ryzen_access ry) {
 EXP float CALL get_core_power(ryzen_access ry, uint32_t core) {
 	if (core > 15)
 		return NAN;
-	
-	u32 baseOffset;
+
+	uint32_t baseOffset;
 	// kevin 0x104 might be power, 16 entries
 	switch (ry->table_ver) {
 		case 0x00370000:
@@ -2181,7 +2281,7 @@ EXP float CALL get_core_power(ryzen_access ry, uint32_t core) {
 		case 0x003F0000: { // Van Gogh
 			if (core >= 4)
 				return NAN;
-	
+
 			baseOffset = 0x238;
 		}
 			break;
@@ -2192,21 +2292,25 @@ EXP float CALL get_core_power(ryzen_access ry, uint32_t core) {
 		case 0x00400005:
 			baseOffset = 0x320;
 			break;
+		case 0x005D0008: // Strix Point - manufacturer-disabled cores are 0W (12 cores in total)
+		case 0x005D0009:
+			baseOffset = 0x9D8;
+			break;
 		case 0x0064020c: // Strix Halo
 			baseOffset = 0xB90;
 			break;
 		default:
 			return NAN;
 	}
-	
+
 	_read_float_value(baseOffset + (core * 4));
 }
 
 EXP float CALL get_core_volt(ryzen_access ry, uint32_t core) {
 	if (core > 15)
 		return NAN;
-	
-	u32 baseOffset;
+
+	uint32_t baseOffset;
 	// kevinh 0x1cc - 17 entries?
 	switch (ry->table_ver) {
 		case 0x00370000:
@@ -2230,6 +2334,10 @@ EXP float CALL get_core_volt(ryzen_access ry, uint32_t core) {
 		case 0x00400005:
 			baseOffset = 0x340;
 			break;
+		case 0x005D0008: // Strix Point - manufacturer-disabled cores are 0V
+		case 0x005D0009:
+			baseOffset = 0xA08;
+			break;
 		case 0x0064020c: // Strix Halo
 			baseOffset = 0xBD0;
 			break;
@@ -2243,8 +2351,8 @@ EXP float CALL get_core_volt(ryzen_access ry, uint32_t core) {
 EXP float CALL get_core_temp(ryzen_access ry, uint32_t core) {
 	if (core > 15)
 		return NAN;
-	
-	u32 baseOffset;
+
+	uint32_t baseOffset;
 
 	switch (ry->table_ver) {
 		case 0x00370000:
@@ -2268,6 +2376,10 @@ EXP float CALL get_core_temp(ryzen_access ry, uint32_t core) {
 		case 0x00400005:
 			baseOffset = 0x360;
 			break;
+		case 0x005D0008: // Strix Point - manufacturer-disabled cores also have temp collected
+		case 0x005D0009:
+			baseOffset = 0xA38;
+			break;
 		case 0x0064020c: // Strix Halo
 			baseOffset = 0xC10;
 			break;
@@ -2281,8 +2393,8 @@ EXP float CALL get_core_temp(ryzen_access ry, uint32_t core) {
 EXP float CALL get_core_clk(ryzen_access ry, uint32_t core) {
 	if (core > 15)
 		return NAN;
-	
-	u32 baseOffset;
+
+	uint32_t baseOffset;
 
 	switch (ry->table_ver) {
 		case 0x00370000:
@@ -2298,13 +2410,17 @@ EXP float CALL get_core_clk(ryzen_access ry, uint32_t core) {
 		case 0x003F0000: { // Van Gogh
 			if (core >= 4)
 				return NAN;
-			
+
 			baseOffset = 0x288;
 		}
 			break;
 		case 0x00400004:
 		case 0x00400005:
 			baseOffset = 0x3c0;
+			break;
+		case 0x005D0008: // Strix Point - manufacturer-disabled cores are 0GHz
+		case 0x005D0009:
+			baseOffset = 0xA68;
 			break;
 		case 0x0064020c:
 			baseOffset = 0xc50;
@@ -2313,7 +2429,7 @@ EXP float CALL get_core_clk(ryzen_access ry, uint32_t core) {
 			return NAN;
 	}
 
-	_read_float_value(baseOffset + (core *4));
+	_read_float_value(baseOffset + (core * 4));
 }
 
 EXP float CALL get_l3_clk(ryzen_access ry) {
@@ -2426,6 +2542,15 @@ EXP float CALL get_gfx_clk(ryzen_access ry) {
 		_read_float_value(0x648); //1608
 	case 0x003F0000: //Van Gogh
 		_read_float_value(0x388); //904
+	/*
+	 * Strix Point - tested, RAPL + gpu_metrics_v3_0 + llama-bench/FurMark/memtester + switching platform_profile
+	 * 0x4B4: gfx power, as FurMark consumes more than llama-bench when pkg power is constant
+	 *        memtester won't increase this, so this is not uncore power
+	 * 0x4B8: volt, 4BC: temp, 4C{0,4}: gfx-related clk (MHz), 4C8: unknown clk
+	 */
+	case 0x005D0008:
+	case 0x005D0009:
+		_read_float_value(0x4C0); // 4C0 and 4C4 are always close to each other, but 4C0 seems more correct
 	case 0x0064020c: // Strix Halo
 		_read_float_value(0x558);
 	default:
@@ -2456,6 +2581,9 @@ EXP float CALL get_gfx_volt(ryzen_access ry) {
 		_read_float_value(0x63C); //1596
 	case 0x003F0000: //Van Gogh
 		_read_float_value(0x37C); //896
+	case 0x005D0008: // Strix Point
+	case 0x005D0009:
+		_read_float_value(0x4B8);
 	case 0x0064020c: // Strix Halo
 		_read_float_value(0x54C);
 	default:
@@ -2486,6 +2614,9 @@ EXP float CALL get_gfx_temp(ryzen_access ry) {
 		_read_float_value(0x640); //1600
 	case 0x003F0000: //Van Gogh
 		_read_float_value(0x380); //896
+	case 0x005D0008: // Strix Point
+	case 0x005D0009:
+		_read_float_value(0x4C8);
 	case 0x0064020c: // Strix Halo
 		_read_float_value(0x550);
 	default:
@@ -2510,6 +2641,38 @@ EXP float CALL get_fclk(ryzen_access ry) {
 	case 0x00400004:
 	case 0x00400005:
 		_read_float_value(0x664); //1636
+	/*
+	 * Strix Point - tested (AI 365, LPDDR5-7500), switching platform_profile
+	 * 0x4E0-0x548 seems to be target clocks (avg between two reads)
+	 * 0x550-0x5B4 seems to be corresponding sampled clocks (avg between two reads)
+	 * 0x550-0x568 maybe 0 if platform_profile is low-power
+	 * 0x4E0/54C: fabric_clk = gpu_metrics_v3_0.average_fclk_frequency
+	 * 0x4E4/550: controller_clk? = DRM_IOCTL_AMDGPU_INFO GFX_MCLK/gpu_metrics_v3_0.average_uclk_frequency
+	 * 0x4E8/554: phy_clk? = controller_clk * 2
+	 * 0x4EC/558: transfer rate (MT/s) = phy_clk * 2 (low-power) or 4 (balanced/performance)
+	 * 0x4F0/55C: = gpu_metrics_v3_0.average_vclk_frequency
+	 * 0x4F8/564: = gpu_metrics_v3_0.average_socclk_frequency
+	 * 0x50C/578: = gpu_metrics_v3_0.average_mpipu_frequency
+	 * 0x510/57C: = gpu_metrics_v3_0.average_ipuclk_frequency
+	 * Possible 0x4E0 values:
+	 *   400, 1050, 1200, 1400, 1600, 1960 (declared at 0x240-0x254)
+	 *   400, 1050, 1200, 1400, 1500, 1600, 1800, 1960 (amdgpu sysfs pp_dpm_fclk)
+	 * Possible 0x4E4 values:
+	 *   400, 800, 937.5, 937.5, 937.5, 937.5 (declared at 0x258-0x26C)
+	 *   400, 800, 937.5 (amdgpu sysfs pp_dpm_mclk)
+	 * Possible 0x4E8 values:
+	 *   800, 1600, 1875, 1875, 1875, 1875 (declared at 0x270-0x284)
+	 * Possible 0x4EC values:
+	 *   1600, 6400, 7500, 7500, 7500, 7500 (declared at 0x288-0x29C)
+	 * Possible 0x4F0 values:
+	 *   800, 800, 1605, 1766, 1962, 2208, 2523, 2944 (amdgpu sysfs pp_dpm_vclk)
+	 * Possible 0x4F8 values:
+	 *   600, 736, 883, 981, 1104, 1261, 1261, 1472 (amdgpu sysfs pp_dpm_socclk)
+	 * See also: https://semiengineering.com/advantages-of-lpddr5-a-new-clocking-scheme/
+	 */
+	case 0x005D0008:
+	case 0x005D0009:
+		_read_float_value(0x4E0);
 	default:
 		break;
 	}
@@ -2532,6 +2695,9 @@ EXP float CALL get_mem_clk(ryzen_access ry) {
 	case 0x00400004:
 	case 0x00400005:
 		_read_float_value(0x66c); //1644
+	case 0x005D0008: // Strix Point - see above
+	case 0x005D0009:
+		_read_float_value(0x4EC); // FIXME: which one?
 	default:
 		break;
 	}
@@ -2601,6 +2767,14 @@ EXP float CALL get_socket_power(ryzen_access ry) {
 		_read_float_value(0x98); //152
 	case 0x003F0000: //Van Gogh
 		_read_float_value(0xA8); //168
+	/*
+	 * Strix Point - tested, RAPL + memtester/llama-bench + switching platform_profile
+	 * 0xA4: = RAPL pkg power - gfx power, should this be SoC power???
+	 * 0xD0: = RAPL pkg power
+	 */
+	case 0x005D0008:
+	case 0x005D0009:
+		_read_float_value(0xD0);
 	default:
 		break;
 	}

@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 #define RYZENADJ_REVISION_VER 0
-#define RYZENADJ_MAJOR_VER 16
+#define RYZENADJ_MAJOR_VER 18
 #define RYZENADJ_MINIOR_VER 0
 
 enum ryzen_family {
@@ -26,9 +26,11 @@ enum ryzen_family {
         FAM_MENDOCINO,
         FAM_PHOENIX,
         FAM_HAWKPOINT,
-        FAM_KRACKAN,
+        FAM_DRAGONRANGE,
+        FAM_KRACKANPOINT,
         FAM_STRIXPOINT,
         FAM_STRIXHALO,
+        FAM_FIRERANGE,
         FAM_END
 };
 

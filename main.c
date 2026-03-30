@@ -3,6 +3,8 @@
 /* Ryzen NB SMU Service Request Tool */
 
 #include <string.h>
+#include <stdlib.h>
+
 #include "lib/ryzenadj.h"
 #include "argparse.h"
 
@@ -16,7 +18,7 @@ do {                                                                            
 		int adjerr = set_##ARG(ry, ARG);                                          \
 		if (!adjerr){                                                             \
 			any_adjust_applied = 1;                                               \
-			printf("Sucessfully set " STRINGIFY(ARG) " to %u\n", ARG);            \
+			printf("Successfully set " STRINGIFY(ARG) " to %u\n", ARG);            \
 		} else if (adjerr == ADJ_ERR_FAM_UNSUPPORTED) {                           \
 			printf("set_" STRINGIFY(ARG) " is not supported on this family\n");   \
 			err = -1;                                                             \
@@ -39,7 +41,7 @@ do {                                                                            
 		int adjerr = set_##ARG(ry);                                               \
 		if (!adjerr){                                                             \
 			any_adjust_applied = 1;                                               \
-			printf("Sucessfully enable " STRINGIFY(ARG) "\n");                    \
+			printf("Successfully enable " STRINGIFY(ARG) "\n");                    \
 		} else if (adjerr == ADJ_ERR_FAM_UNSUPPORTED) {                           \
 			printf("set_" STRINGIFY(ARG) " is not supported on this family\n");   \
 			err = -1;                                                             \
@@ -63,23 +65,23 @@ static const char *const usage[] = {
 
 static const char *family_name(enum ryzen_family fam)
 {
-	switch (fam)
-	{
-	case FAM_RAVEN: return "Raven";
-	case FAM_PICASSO: return "Picasso";
-	case FAM_RENOIR: return "Renoir";
-	case FAM_CEZANNE: return "Cezanne";
-	case FAM_DALI: return "Dali";
-	case FAM_LUCIENNE: return "Lucienne";
-	case FAM_VANGOGH: return "Vangogh";
-	case FAM_REMBRANDT: return "Rembrandt";
-	case FAM_PHOENIX: return "Phoenix Point";
-	case FAM_HAWKPOINT: return "Hawk Point";
-	case FAM_KRACKAN: return "Krackan";
-	case FAM_STRIXPOINT: return "Strix Point";
-	case FAM_STRIXHALO: return "Strix Halo";
-	default:
-		break;
+	switch (fam) {
+		case FAM_RAVEN: return "Raven";
+		case FAM_PICASSO: return "Picasso";
+		case FAM_RENOIR: return "Renoir";
+		case FAM_CEZANNE: return "Cezanne";
+		case FAM_DALI: return "Dali";
+		case FAM_LUCIENNE: return "Lucienne";
+		case FAM_VANGOGH: return "Vangogh";
+		case FAM_REMBRANDT: return "Rembrandt";
+		case FAM_PHOENIX: return "Phoenix Point";
+		case FAM_HAWKPOINT: return "Hawk Point";
+		case FAM_DRAGONRANGE: return "Dragon Range";
+		case FAM_KRACKANPOINT: return "Krackan Point";
+		case FAM_STRIXPOINT: return "Strix Point";
+		case FAM_STRIXHALO: return "Strix Halo";
+		case FAM_FIRERANGE: return "Fire Range";
+		default: break;
 	}
 
 	return "Unknown";
@@ -203,7 +205,7 @@ int main(int argc, const char **argv)
 	uint32_t skin_temp_power_limit = -1;
 	uint32_t gfx_clk = -1, oc_clk = -1, oc_volt = -1, coall = -1, coper = -1, cogfx = -1;
 
-	//create structure for parseing
+	//create structure for parsing
 	struct argparse_option options[] = {
 		OPT_HELP(),
 		OPT_GROUP("Options"),
@@ -244,7 +246,7 @@ int main(int argc, const char **argv)
 		OPT_U32('\0', "skin-temp-limit", &skin_temp_power_limit, "Skin Temperature Power Limit (mW)"),
 		OPT_U32('\0', "gfx-clk", &gfx_clk, "Forced Clock Speed MHz (Renoir Only)"),
 		OPT_U32('\0', "oc-clk", &oc_clk, "Forced Core Clock Speed MHz (Renoir and up Only)"),
-		OPT_U32('\0', "oc-volt", &oc_volt, "Forced Core VID: Must follow this calcuation (1.55 - [VID you want to set e.g. 1.25 for 1.25v]) / 0.00625 (Renoir and up Only)"),
+		OPT_U32('\0', "oc-volt", &oc_volt, "Forced Core VID: Must follow this calculation (1.55 - [VID you want to set e.g. 1.25 for 1.25v]) / 0.00625 (Renoir and up Only)"),
 		OPT_BOOLEAN('\0', "enable-oc", &enable_oc, "Enable OC (Renoir and up Only)"),
 		OPT_BOOLEAN('\0', "disable-oc", &disable_oc, "Disable OC (Renoir and up Only)"),
 		OPT_U32('\0', "set-coall", &coall, "All core Curve Optimiser"),

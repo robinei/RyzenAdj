@@ -10,7 +10,6 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-option(LINUX_USE_RYZEN_SMU_MODULE "Use ryzen_smu kernel module instead of /dev/mem" OFF)
 
 #Enable LTO
 include(CheckIPOSupported)
@@ -23,14 +22,11 @@ endif()
 AUX_SOURCE_DIRECTORY(./ SRC_DIR)
 
 if(WIN32)
-set(OS_SOURCE lib/osdep_win32.cpp)
+set(OS_SOURCE lib/win32/osdep_win32.cpp)
 set(OS_LINK_LIBRARY WinRing0x64)
 set(OS_LINK_DIR ./win32)
-elseif(LINUX_USE_RYZEN_SMU_MODULE)
-add_compile_definitions(LINUX_USE_RYZEN_SMU_MODULE=1)
-set(OS_SOURCE lib/osdep_linux_smu_kernel_module.c)
 else()
-set(OS_SOURCE lib/osdep_linux.c)
+set(OS_SOURCE lib/linux/osdep_linux.c lib/linux/osdep_linux_mem.c lib/linux/osdep_linux_smu_kernel_module.c)
 #if (CMAKE_BUILD_TYPE STREQUAL "Release")
 #Static link libpci in release build
 #set(OS_LINK_LIBRARY libpci.a)

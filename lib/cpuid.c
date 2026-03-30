@@ -79,6 +79,8 @@ static enum ryzen_family cpuid_load_family()
         case 64:
         case 68:
             return FAM_REMBRANDT;
+        case 97:
+            return FAM_DRAGONRANGE;
         case 116:
         case 120:
             return FAM_PHOENIX;
@@ -94,8 +96,10 @@ static enum ryzen_family cpuid_load_family()
         case 32:
         case 36:
             return FAM_STRIXPOINT;
+        case 68:
+            return FAM_FIRERANGE;
         case 96:
-            return FAM_KRACKAN;
+            return FAM_KRACKANPOINT;
         case 112:
             return FAM_STRIXHALO;
         default:
